@@ -1,0 +1,18 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="go test resty-service-template" type="GoTestRunConfiguration" factoryName="Go Test" nameIsGenerated="true">
+    <module name="resty-service-template" />
+    <working_directory value="$PROJECT_DIR$" />
+    <go_parameters value="-gcflags=-l -covermode=atomic -race" />
+    <envs>
+      <env name="ENVIRONMENT" value="testing" />
+    </envs>
+    <kind value="DIRECTORY" />
+    <package value="service" />
+    <directory value="$PROJECT_DIR$" />
+    <filePath value="$PROJECT_DIR$" />
+    <framework value="gotest" />
+    <method v="2">
+      <option name="RunConfigurationTask" enabled="true" run_configuration_name="lint" run_configuration_type="TaskRunConfiguration" />
+    </method>
+  </configuration>
+</component>
