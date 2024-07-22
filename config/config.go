@@ -107,7 +107,7 @@ type DBConfig struct { //nolint:govet
 	HOST     string `env:"HOST,required"`
 	USER     string `env:"USER,required"`
 	PASSWORD string `env:"PASSWORD,required"`
-	DB       string `env:"DB,required"`
+	DB       string `env:"db,required"`
 	SSL      string `env:"SSL,required"`
 }
 

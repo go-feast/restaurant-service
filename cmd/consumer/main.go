@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/ThreeDotsLabs/watermill/message"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-feast/topics"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -15,18 +16,23 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"service/api/pubsub/restaurant/handler"
 	"service/closer"
 	"service/config"
+	"service/event"
 	mw "service/http/middleware"
+	"service/infrastructure/repository/order"
+	restaurant2 "service/infrastructure/repository/restaurant"
 	"service/logging"
 	"service/metrics"
+	"service/pubsub"
 	serv "service/server"
 	"service/tracing"
 )
 
 const (
 	version     = "v1.0"
-	serviceName = "template_consumer"
+	serviceName = "restaurant_consumer"
 )
 
 func main() {
@@ -100,7 +106,7 @@ func main() {
 			Msg("failed to connect to database")
 	}
 
-	closers := RegisterConsumerHandlers(router, db, c.Kafka)
+	closers := RegisterConsumerHandlers(router, db, *c.Kafka)
 
 	Closer.AppendClosers(closers...)
 
@@ -124,11 +130,46 @@ func main() {
 }
 
 func RegisterMetricRoute(r chi.Router) {
-	handler := promhttp.Handler()
-	r.Get("/metrics", handler.ServeHTTP)
+	h := promhttp.Handler()
+	r.Get("/metrics", h.ServeHTTP)
 	r.Get("/healthz", mw.Healthz)
 }
 
-func RegisterConsumerHandlers(_ *message.Router, _ *gorm.DB, _ *config.KafkaConfig) []closer.C {
+func RegisterConsumerHandlers(r *message.Router, db *gorm.DB, c config.KafkaConfig) []closer.C {
+	subKafka, err := pubsub.NewKafkaSubscriber(c.KafkaURL, logging.NewWatermillAdapter())
+	if err != nil {
+		panic(err)
+	}
+
+	pubKafka, err := pubsub.NewKafkaPublisher(c.KafkaURL, logging.NewWatermillAdapter())
+	if err != nil {
+		panic(err)
+	}
+
+	restaurantRepository := restaurant2.NewGormRepository(db)
+	orderRepository := order.NewGormRepository(db)
+
+	h := handler.NewHandler(event.JSONMarshaler{}, restaurantRepository, orderRepository, logging.New())
+
+	r.AddNoPublisherHandler("order.cooking",
+		topics.Cooking.String(),
+		subKafka,
+		h.ReceiveOrderEvent(topics.Cooking),
+	)
+
+	r.AddNoPublisherHandler("order.finished.cooking",
+		topics.CookingFinished.String(),
+		subKafka,
+		h.ReceiveOrderEvent(topics.CookingFinished),
+	)
+
+	r.AddHandler("order.finished.cooking",
+		topics.Paid.String(),
+		subKafka,
+		topics.Paid.String(),
+		pubKafka,
+		h.CreateOrder,
+	)
+
 	return []closer.C{}
 }

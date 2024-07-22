@@ -15,18 +15,25 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"service/api/http/restaurant/handler"
 	"service/closer"
 	"service/config"
+	"service/domain/restaurant"
+	"service/event"
 	mw "service/http/middleware"
+	"service/infrastructure/repository/order"
+	rest "service/infrastructure/repository/restaurant"
+	"service/infrastructure/saver"
 	"service/logging"
 	"service/metrics"
+	"service/pubsub"
 	serv "service/server"
 	"service/tracing"
 )
 
 const (
 	version     = "v1.0"
-	serviceName = "order"
+	serviceName = "restaurant"
 	driverName  = "pgx/v5"
 )
 
@@ -86,6 +93,11 @@ func main() {
 	db = db.WithContext(ctx)
 
 	// domain gorm initialization
+	err = restaurant.InitRestaurantModels(db)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("failed to initialize restaurant models")
+		return
+	}
 
 	// main server
 	mainServiceServer, mainRouter := serv.NewServer(c.Server)
@@ -95,7 +107,7 @@ func main() {
 
 	// register routes
 	//		main
-	fc := RegisterMainServiceRoutes(mainRouter, db)
+	fc := RegisterMainServiceRoutes(mainRouter, db, *c.Kafka)
 
 	forClose.AppendClosers(fc...)
 	//		metric
@@ -119,16 +131,36 @@ func Middlewares(r chi.Router) {
 
 func RegisterMainServiceRoutes(
 	r chi.Router,
-	_ *gorm.DB,
+	db *gorm.DB,
+	c config.KafkaConfig,
 ) []closer.C { //nolint:unparam
 	// middlewares
 	Middlewares(r)
 	r.Get("/healthz", mw.Healthz)
 
+	kafkaPub, err := pubsub.NewKafkaPublisher(c.KafkaURL, logging.NewWatermillAdapter())
+	if err != nil {
+		panic(err)
+	}
+
+	restaurantRepository := rest.NewGormRepository(db)
+	orderRepository := order.NewGormRepository(db)
+	s := saver.NewSaver(restaurantRepository)
+	h := handler.NewHandler(s, orderRepository, kafkaPub, event.JSONMarshaler{}, logging.New())
+
+	r.Route("/api/v1/", func(r chi.Router) {
+		r.Route("restaurants/", func(r chi.Router) {
+			r.Post("/", h.CreateRestaurant) // create rest
+		})
+		r.Route("/orders", func(r chi.Router) {
+			r.Post("/{id}", h.CookingOrder)
+		})
+	})
+
 	return []closer.C{}
 }
 
 func RegisterMetricRoute(r chi.Router) {
-	handler := promhttp.Handler()
-	r.Get("/metrics", handler.ServeHTTP)
+	h := promhttp.Handler()
+	r.Get("/metrics", h.ServeHTTP)
 }
